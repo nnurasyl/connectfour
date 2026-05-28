@@ -18,6 +18,12 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "@vercel/kv": "^3.0.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.3",
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "concurrently": "^10.0.0"
   }

@@ -8,7 +8,7 @@ import { PrimaryButton, TextField } from "./ui/fields";
 import { checkWinner, drop, isFull, newBoard, type Board } from "./game/engine";
 import { pickMoveHard, pickMoveMedium } from "./game/ai";
 import { loadGuestArchive, saveGuestGame } from "./game/archive";
-import { createSocket } from "./lib/socket";
+import { createSocket, ONLINE_ENABLED } from "./lib/socket";
 
 function App() {
   const hydrateMe = useAuth((s) => s.hydrateMe);
@@ -18,33 +18,43 @@ function App() {
     if (token) hydrateMe();
   }, [token, hydrateMe]);
 
-  return (
-    <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/auth" element={<Auth />} />
-      <Route path="/account" element={<Account />} />
-      <Route path="/play/:mode" element={<Play />} />
-      <Route path="/play/room/:roomId" element={<RoomPlay />} />
-      <Route path="/friends" element={<Friends />} />
-      <Route path="/profile/:username" element={<Profile />} />
-      <Route path="/leaderboard" element={<Leaderboard />} />
-      <Route path="/archive" element={<Archive />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-}
+              {!onlineEnabled ? (
+                <UnavailableCard
+                  title="Онлайн матч"
+                  description="Недоступно в серверлес-деплое (нет WebSocket)."
+                />
+              ) : isGuest ? (
+                <Gate />
+              ) : (
+                <Link
+                  className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 hover:bg-[hsl(var(--card)/0.75)]"
+                  to="/play/online"
+                >
+                  <div className="text-left">
+                    <div className="text-sm font-semibold">Онлайн матч</div>
+                    <div className="text-xs text-[hsl(var(--muted))]">Играй с людьми онлайн, рейтинг обновляется</div>
+                  </div>
+                </Link>
+              )}
 
-export default App;
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-full bg-[radial-gradient(70%_60%_at_30%_0%,hsl(var(--primary)/0.22),transparent_55%),radial-gradient(70%_60%_at_80%_15%,hsl(var(--primary-2)/0.22),transparent_55%)]">
-      <div className="mx-auto max-w-6xl px-4 py-6">{children}</div>
-    </div>
-  );
-}
-
-function TopBar() {
+              {!onlineEnabled ? (
+                <UnavailableCard
+                  title="Играть с другом"
+                  description="Недоступно в серверлес-деплое (нет WebSocket)."
+                />
+              ) : isGuest ? (
+                <Gate />
+              ) : (
+                <Link
+                  className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 hover:bg-[hsl(var(--card)/0.75)]"
+                  to="/friends"
+                >
+                  <div className="text-left">
+                    <div className="text-sm font-semibold">Играть с другом</div>
+                    <div className="text-xs text-[hsl(var(--muted))]">Выбери друга и кинь вызов</div>
+                  </div>
+                </Link>
+              )}
   const { user, isGuest, guestName, logout } = useAuth();
   return (
     <div className="flex items-center justify-between rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] px-4 py-3 backdrop-blur">
@@ -182,8 +192,51 @@ function Gate({ children }: { children: React.ReactNode }) {
   );
 }
 
+function UnavailableCard({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 opacity-60">
+      <div className="text-left">
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-xs text-[hsl(var(--muted))]">{description}</div>
+      </div>
+    </div>
+  );
+}
+
+function OnlineUnavailable({
+  title,
+  message,
+  backTo = "/",
+}: {
+  title: string;
+  message: string;
+  backTo?: string;
+}) {
+  const nav = useNavigate();
+  return (
+    <Shell>
+      <TopBar />
+      <div className="mt-6 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-6 backdrop-blur">
+        <div className="text-left">
+          <div className="text-2xl font-bold">{title}</div>
+          <div className="mt-1 text-sm text-[hsl(var(--muted))]">{message}</div>
+        </div>
+        <div className="mt-4">
+          <button
+            className="rounded-xl bg-[hsl(var(--text))] px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
+            onClick={() => nav(backTo)}
+          >
+            Назад
+          </button>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
 function Home() {
   const { isGuest } = useAuth();
+  const onlineEnabled = ONLINE_ENABLED;
   const nav = useNavigate();
   const hydrateMe = useAuth((s) => s.hydrateMe);
   const user = useAuth((s) => s.user);
@@ -808,6 +861,14 @@ function Play() {
 }
 
 function OnlinePlay() {
+  if (!ONLINE_ENABLED) {
+    return (
+      <OnlineUnavailable
+        title="Онлайн матч"
+        message="Онлайн-режим недоступен в этом деплое. Vercel serverless не поддерживает WebSocket."
+      />
+    );
+  }
   const nav = useNavigate();
   const { isGuest, user, guestName } = useAuth();
   const meName = isGuest ? guestName : (user?.username ?? "Игрок");
@@ -1002,6 +1063,14 @@ function OnlinePlay() {
 }
 
 function Friends() {
+  if (!ONLINE_ENABLED) {
+    return (
+      <OnlineUnavailable
+        title="Друзья"
+        message="Функции друзей и онлайн-вызовы недоступны в этом деплое."
+      />
+    );
+  }
   const nav = useNavigate();
   const { isGuest } = useAuth();
   const [tab, setTab] = useState<"friends" | "invites">("friends");
@@ -1162,6 +1231,15 @@ function Friends() {
 }
 
 function Profile() {
+  if (!ONLINE_ENABLED) {
+    return (
+      <OnlineUnavailable
+        title="Профиль"
+        message="Онлайн-вызовы недоступны в этом деплое."
+        backTo="/leaderboard"
+      />
+    );
+  }
   const nav = useNavigate();
   const { username } = useParams();
   const { isGuest } = useAuth();
@@ -1242,6 +1320,15 @@ function Profile() {
 }
 
 function RoomPlay() {
+  if (!ONLINE_ENABLED) {
+    return (
+      <OnlineUnavailable
+        title="Матч с другом"
+        message="Матчи с друзьями недоступны в этом деплое."
+        backTo="/friends"
+      />
+    );
+  }
   const nav = useNavigate();
   const { roomId } = useParams();
   const { isGuest, user, guestName } = useAuth();
