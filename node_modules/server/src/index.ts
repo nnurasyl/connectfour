@@ -16,6 +16,8 @@ const PORT = Number(process.env.PORT ?? 5174);
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev_secret_change_me";
 const DB_PATH = process.env.DB_PATH ?? path.join(process.cwd(), "data", "app.sqlite");
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
 
 const db = openDb(DB_PATH);
 migrate(db);
@@ -127,11 +129,100 @@ app.get("/api/rating/history", authRequired(JWT_SECRET), (req: AuthedRequest, re
   res.json({ history: rows, currentRating: current?.rating ?? 1000, pro: !!current?.pro });
 });
 
+const proSchema = z.object({ promoCode: z.string().min(1).max(64) });
 app.post("/api/subscription/pro", authRequired(JWT_SECRET), (req: AuthedRequest, res) => {
-  // Stub purchase: mark pro=1. Real payments can be plugged later.
+  const parsed = proSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "BAD_INPUT" });
+  const code = parsed.data.promoCode.trim();
+  if (code !== "NFACTORIAL") return res.status(403).json({ error: "INVALID_PROMO" });
+
   const uid = req.user!.id;
   db.prepare(`UPDATE users SET pro=1 WHERE id=@uid`).run({ uid });
   res.json({ ok: true, pro: true });
+});
+
+// --- Pro analysis (Gemini) ---
+const analysisSchema = z.object({
+  mode: z.enum(["ai_medium", "ai_hard"]),
+  board: z.array(z.array(z.number().int().min(0).max(2))).length(6),
+  move: z.object({ col: z.number().int().min(0).max(6), player: z.number().int().min(1).max(2) }),
+});
+
+function heuristicScore(board: number[][], col: number) {
+  // fallback: prefer center and not-too-edge
+  const center = 3;
+  const dist = Math.abs(col - center);
+  return Math.max(0, Math.min(1, 1 - dist / 4));
+}
+
+function tryExtractJson(text: string): any | null {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+}
+
+app.post("/api/analysis/move", authRequired(JWT_SECRET), async (req: AuthedRequest, res) => {
+  const parsed = analysisSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "BAD_INPUT" });
+  const uid = req.user!.id;
+  const me = db.prepare(`SELECT pro FROM users WHERE id=@id LIMIT 1`).get({ id: uid }) as undefined | { pro: number };
+  if (!me?.pro) return res.status(403).json({ error: "PRO_REQUIRED" });
+
+  const { board, move, mode } = parsed.data;
+
+  // If no API key configured: return heuristic score
+  if (!GEMINI_API_KEY) {
+    return res.json({
+      score: heuristicScore(board, move.col),
+      explanation: "Оценка рассчитана локально (Gemini ключ не настроен на сервере).",
+    });
+  }
+
+  const prompt = `
+Ты анализируешь игру Connect Four. Нужно оценить качество хода человека по шкале 0..1 (где 1 — лучший).
+Верни СТРОГО JSON: {"score": number, "explanation": string}
+Правила:
+- score от 0 до 1
+- explanation коротко (1-2 предложения), по-русски
+
+Режим: ${mode}
+Игрок (1 или 2): ${move.player}
+Колонка хода (0..6): ${move.col}
+Текущая доска 6x7 (0 пусто, 1 красный, 2 желтый), строки сверху вниз:
+${JSON.stringify(board)}
+`;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      GEMINI_MODEL,
+    )}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 120 },
+      }),
+    });
+    const j: any = await r.json();
+    const text =
+      j?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("\n") ??
+      JSON.stringify(j);
+    const obj = tryExtractJson(text);
+    const score = Math.max(0, Math.min(1, Number(obj?.score)));
+    const explanation = String(obj?.explanation ?? text).slice(0, 500);
+    if (!Number.isFinite(score)) {
+      return res.json({ score: heuristicScore(board, move.col), explanation: "Не удалось распарсить ответ Gemini." });
+    }
+    return res.json({ score, explanation });
+  } catch {
+    return res.json({ score: heuristicScore(board, move.col), explanation: "Ошибка запроса Gemini, показана локальная оценка." });
+  }
 });
 
 // Public рейтинг (пока: топ по rating_after, если null — берём rating_before; позже уточним формулу)

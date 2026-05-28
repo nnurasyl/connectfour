@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PrimaryButton, TextField } from "./ui/fields";
 import { checkWinner, drop, isFull, newBoard, type Board } from "./game/engine";
 import { pickMoveHard, pickMoveMedium } from "./game/ai";
-import { saveGuestGame } from "./game/archive";
+import { loadGuestArchive, saveGuestGame, type ArchivedGame } from "./game/archive";
 import { createSocket } from "./lib/socket";
 
 function App() {
@@ -59,6 +59,12 @@ function TopBar() {
       </div>
 
       <div className="flex items-center gap-2">
+        <Link
+          className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-medium hover:bg-[hsl(var(--card)/0.75)]"
+          to="/"
+        >
+          Главная
+        </Link>
         <Link
           className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-medium hover:bg-[hsl(var(--card)/0.75)]"
           to="/leaderboard"
@@ -178,6 +184,13 @@ function Gate({ children }: { children: React.ReactNode }) {
 
 function Home() {
   const { isGuest } = useAuth();
+  const nav = useNavigate();
+  const hydrateMe = useAuth((s) => s.hydrateMe);
+  const user = useAuth((s) => s.user);
+  const buying = useState(false);
+  const [isBuying, setIsBuying] = buying;
+  const [promo, setPromo] = useState("");
+  const [promoMsg, setPromoMsg] = useState<string | null>(null);
   return (
     <Shell>
       <TopBar />
@@ -191,9 +204,58 @@ function Home() {
             <div className="mt-1 text-xs text-[hsl(var(--muted))]">
               С Pro можно анализировать ходы как в шахматах (оценка 0..1 от Gemini).
             </div>
-            <button className="mt-3 w-full rounded-xl bg-[hsl(var(--text))] px-3 py-2 text-sm font-semibold text-white hover:opacity-90">
-              Купить подписку
-            </button>
+            {isGuest ? (
+              <button
+                className="mt-3 w-full rounded-xl bg-[hsl(var(--text))] px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
+                onClick={() => nav("/auth")}
+              >
+                Войти, чтобы купить
+              </button>
+            ) : user?.pro ? (
+              <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-left text-sm">
+                Pro активен
+              </div>
+            ) : (
+              <>
+                <div className="mt-3">
+                  <TextField
+                    label="Промокод"
+                    value={promo}
+                    onChange={setPromo}
+                    placeholder='например: "NFACTORIAL"'
+                    autoComplete="off"
+                  />
+                </div>
+                {promoMsg && (
+                  <div className="mt-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-left text-sm">
+                    {promoMsg}
+                  </div>
+                )}
+                <button
+                  className="mt-3 w-full rounded-xl bg-[hsl(var(--text))] px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                  disabled={isBuying}
+                  onClick={async () => {
+                    setIsBuying(true);
+                    setPromoMsg(null);
+                    try {
+                      await api("/api/subscription/pro", {
+                        method: "POST",
+                        body: JSON.stringify({ promoCode: promo.trim() }),
+                      });
+                      await hydrateMe();
+                      setPromoMsg("Pro активирован");
+                    } catch (e: any) {
+                      const code = String(e?.code ?? e?.message ?? "FAILED");
+                      setPromoMsg(code === "INVALID_PROMO" ? "Неверный промокод" : `Ошибка: ${code}`);
+                    } finally {
+                      setIsBuying(false);
+                    }
+                  }}
+                >
+                  {isBuying ? "Проверяем..." : "Активировать Pro"}
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -407,12 +469,38 @@ function Auth() {
 }
 
 function Account() {
+  const { user } = useAuth();
   return (
     <Shell>
       <TopBar />
       <div className="mt-6 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-6 backdrop-blur">
         <div className="text-left text-lg font-bold">Аккаунт</div>
-        <div className="mt-2 text-left text-sm text-[hsl(var(--muted))]">Тут будет изменение данных профиля.</div>
+        <div className="mt-2 grid grid-cols-12 gap-6">
+          <div className="col-span-12 lg:col-span-7 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+            <div className="text-left text-sm font-semibold">Данные</div>
+            <div className="mt-2 text-left text-sm text-[hsl(var(--muted))]">
+              Username: <span className="font-semibold text-[hsl(var(--text))]">{user?.username ?? "—"}</span>
+            </div>
+            <div className="mt-1 text-left text-sm text-[hsl(var(--muted))]">
+              Email: <span className="font-semibold text-[hsl(var(--text))]">{user?.email ?? "—"}</span>
+            </div>
+            <div className="mt-1 text-left text-sm text-[hsl(var(--muted))]">
+              Рейтинг: <span className="font-semibold text-[hsl(var(--text))]">{user?.rating ?? "—"}</span>
+            </div>
+          </div>
+          <div className="col-span-12 lg:col-span-5 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+            <div className="text-left text-sm font-semibold">Подписка</div>
+            <div className="mt-2 text-left text-sm text-[hsl(var(--muted))]">
+              Статус:{" "}
+              <span className={`font-semibold ${user?.pro ? "text-emerald-600" : "text-[hsl(var(--text))]"}`}>
+                {user?.pro ? "Pro" : "Обычная"}
+              </span>
+            </div>
+            <div className="mt-2 text-left text-xs text-[hsl(var(--muted))]">
+              Pro включает анализ хода (оценка 0..1) в играх с ИИ.
+            </div>
+          </div>
+        </div>
       </div>
     </Shell>
   );
@@ -432,7 +520,9 @@ function Play() {
   const [board, setBoard] = useState<Board>(() => newBoard());
   const [turn, setTurn] = useState<1 | 2>(1);
   const [winner, setWinner] = useState<0 | 1 | 2>(0);
-  const [moves, setMoves] = useState<Array<{ moveIndex: number; player: 1 | 2; col: number; row: number }>>([]);
+  const [moves, setMoves] = useState<
+    Array<{ moveIndex: number; player: 1 | 2; col: number; row: number; analysisScore?: number; analysisText?: string }>
+  >([]);
   const [busy, setBusy] = useState(false);
   const [gameId, setGameId] = useState<string | null>(null);
 
@@ -507,6 +597,37 @@ function Play() {
       body: JSON.stringify(mv),
     }).catch(() => {});
   }, [gameId, isGuest, moves]);
+
+  // Pro анализ: после хода игрока (player=1) в AI-режимах
+  useEffect(() => {
+    if (!ai) return;
+    if (isGuest) return;
+    if (!user?.pro) return;
+    if (moves.length === 0) return;
+    const last = moves[moves.length - 1];
+    if (last.player !== 1) return;
+    if (last.analysisScore !== undefined) return;
+    (async () => {
+      try {
+        const data = await api<{ score: number; explanation: string }>("/api/analysis/move", {
+          method: "POST",
+          body: JSON.stringify({
+            mode: aiLevel === "hard" ? "ai_hard" : "ai_medium",
+            board,
+            move: { col: last.col, player: 1 },
+          }),
+        });
+        setMoves((prev) =>
+          prev.map((m) =>
+            m.moveIndex === last.moveIndex ? { ...m, analysisScore: data.score, analysisText: data.explanation } : m,
+          ),
+        );
+      } catch {
+        // ignore
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ai, aiLevel, board, isGuest, moves.length, user?.pro]);
 
   useEffect(() => {
     if (winner === 0 && !isFull(board)) return;
@@ -648,7 +769,14 @@ function Play() {
                   <div className="divide-y divide-[hsl(var(--border))]">
                     {moves.map((m) => (
                       <div key={m.moveIndex} className="flex items-center justify-between p-3 text-sm">
-                        <div className="font-semibold">#{m.moveIndex + 1}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-semibold">#{m.moveIndex + 1}</div>
+                          {m.analysisScore !== undefined && (
+                            <div className="rounded-lg bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                              {m.analysisScore.toFixed(2)}
+                            </div>
+                          )}
+                        </div>
                         <div className="text-[hsl(var(--muted))]">
                           {m.player === 1 ? p1Name : p2Name} → колонна {m.col + 1}
                         </div>
@@ -666,6 +794,11 @@ function Play() {
                   ? "Как гость: партия сохранится локально в браузере и будет видна в архиве."
                   : "В аккаунте: партия сохраняется на сервере и влияет на рейтинг."}
               </div>
+              {!isGuest && ai && !user?.pro && (
+                <div className="mt-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-left text-xs text-[hsl(var(--muted))]">
+                  Pro выключен: анализ ходов недоступен. Купи подписку на главной, чтобы видеть оценку 0..1.
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1251,25 +1384,219 @@ function RoomPlay() {
 }
 
 function Leaderboard() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["top50"],
+    queryFn: () => api<{ top: Array<{ id: string; username: string; rating: number }> }>("/api/leaderboard/top50"),
+  });
   return (
     <Shell>
       <TopBar />
       <div className="mt-6 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-6 backdrop-blur">
-        <div className="text-left text-lg font-bold">Топ мира</div>
-        <div className="mt-2 text-left text-sm text-[hsl(var(--muted))]">Топ-50 будет грузиться с сервера.</div>
+        <div className="flex items-center justify-between">
+          <div className="text-left">
+            <div className="text-2xl font-bold">Топ мира</div>
+            <div className="mt-1 text-sm text-[hsl(var(--muted))]">Топ‑50 игроков по рейтингу.</div>
+          </div>
+        </div>
+
+        <div className="mt-5 overflow-hidden rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+          {isLoading ? (
+            <div className="p-4 text-left text-sm text-[hsl(var(--muted))]">Загрузка…</div>
+          ) : (
+            <div className="divide-y divide-[hsl(var(--border))]">
+              {(data?.top ?? []).map((u, idx) => (
+                <div key={u.id} className="flex items-center justify-between p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 text-left text-sm font-bold">#{idx + 1}</div>
+                    <div className="text-left">
+                      <div className="text-sm font-semibold">{u.username}</div>
+                      <div className="text-xs text-[hsl(var(--muted))]">Рейтинг: {u.rating}</div>
+                    </div>
+                  </div>
+                  <Link
+                    className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--card)/0.75)]"
+                    to={`/profile/${encodeURIComponent(u.username)}`}
+                  >
+                    Профиль
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </Shell>
   );
 }
 
 function Archive() {
+  const nav = useNavigate();
+  const { isGuest } = useAuth();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [step, setStep] = useState(0);
+
+  const guestGames = useMemo(() => (isGuest ? loadGuestArchive() : []), [isGuest]);
+  const { data } = useQuery({
+    queryKey: ["archive"],
+    enabled: !isGuest,
+    queryFn: () =>
+      api<{ games: Array<{ id: string; created_at: number; mode: string; player1_name: string; player2_name: string; winner: number | null; finished_at: number | null }> }>("/api/games/archive"),
+  });
+
+  const { data: movesData } = useQuery({
+    queryKey: ["archive-moves", selectedId],
+    enabled: !isGuest && !!selectedId,
+    queryFn: () =>
+      api<{ moves: Array<{ move_index: number; player: 1 | 2; col: number; row: number; analysis_score?: number | null; analysis_text?: string | null }> }>(
+        `/api/games/${selectedId}/moves`,
+      ),
+  });
+
+  const selectedGuest = useMemo(() => guestGames.find((g) => g.id === selectedId) ?? null, [guestGames, selectedId]);
+
+  const replayMoves = useMemo(() => {
+    if (isGuest) return selectedGuest?.moves ?? [];
+    return (movesData?.moves ?? []).map((m) => ({
+      moveIndex: m.move_index,
+      player: m.player,
+      col: m.col,
+      row: m.row,
+    }));
+  }, [isGuest, movesData?.moves, selectedGuest?.moves]);
+
+  const replayBoard = useMemo(() => {
+    let b = newBoard();
+    for (let i = 0; i < Math.min(step, replayMoves.length); i++) {
+      const mv = replayMoves[i];
+      const d = drop(b, mv.col, mv.player);
+      if (d) b = d.board;
+    }
+    return b;
+  }, [replayMoves, step]);
+
+  const list = isGuest
+    ? guestGames.map((g) => ({
+        id: g.id,
+        createdAt: g.createdAt,
+        mode: g.mode,
+        p1: g.player1Name,
+        p2: g.player2Name,
+        winner: g.winner,
+      }))
+    : (data?.games ?? []).map((g) => ({
+        id: g.id,
+        createdAt: g.created_at,
+        mode: g.mode,
+        p1: g.player1_name,
+        p2: g.player2_name,
+        winner: (g.winner ?? 0) as any,
+      }));
+
   return (
     <Shell>
       <TopBar />
       <div className="mt-6 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-6 backdrop-blur">
-        <div className="text-left text-lg font-bold">Архив игр</div>
-        <div className="mt-2 text-left text-sm text-[hsl(var(--muted))]">
-          Тут будет список игр и просмотр ходов кнопками «вперёд/назад».
+        <div className="flex items-center justify-between">
+          <div className="text-left">
+            <div className="text-2xl font-bold">Архив игр</div>
+            <div className="mt-1 text-sm text-[hsl(var(--muted))]">
+              {isGuest ? "Гостевой архив хранится в браузере." : "Архив аккаунта хранится на сервере."}
+            </div>
+          </div>
+          <button
+            className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--card)/0.75)]"
+            onClick={() => nav("/")}
+          >
+            Назад
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-12 gap-6">
+          <div className="col-span-12 lg:col-span-5">
+            <div className="overflow-hidden rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+              {list.length === 0 ? (
+                <div className="p-4 text-left text-sm text-[hsl(var(--muted))]">Пока нет сохранённых игр.</div>
+              ) : (
+                <div className="divide-y divide-[hsl(var(--border))]">
+                  {list.map((g) => (
+                    <button
+                      key={g.id}
+                      className={`w-full p-4 text-left hover:bg-[hsl(var(--card)/0.75)] ${selectedId === g.id ? "bg-[hsl(var(--card)/0.75)]" : ""}`}
+                      onClick={() => {
+                        setSelectedId(g.id);
+                        setStep(0);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">
+                          {g.p1} vs {g.p2}
+                        </div>
+                        <div className="text-xs text-[hsl(var(--muted))]">{new Date(g.createdAt).toLocaleString()}</div>
+                      </div>
+                      <div className="mt-1 text-xs text-[hsl(var(--muted))]">
+                        Режим: {g.mode} • Итог:{" "}
+                        {g.winner === 0 ? "ничья/неизвестно" : g.winner === 1 ? "победа P1" : "победа P2"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="col-span-12 lg:col-span-7">
+            <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-left text-sm font-semibold">Просмотр партии</div>
+                <div className="text-right text-xs text-[hsl(var(--muted))]">
+                  Ход: {Math.min(step, replayMoves.length)}/{replayMoves.length}
+                </div>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--card)/0.75)] disabled:opacity-50"
+                  disabled={!selectedId || step <= 0}
+                  onClick={() => setStep((s) => Math.max(0, s - 1))}
+                >
+                  Назад
+                </button>
+                <button
+                  className="rounded-xl bg-[hsl(var(--text))] px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                  disabled={!selectedId || step >= replayMoves.length}
+                  onClick={() => setStep((s) => Math.min(replayMoves.length, s + 1))}
+                >
+                  Вперёд
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-7 gap-2 rounded-2xl bg-[hsl(var(--text))] p-3">
+                {Array.from({ length: 7 }).map((_, col) => (
+                  <div key={`a_col_${col}`} className="rounded-xl bg-white/10 p-2">
+                    <div className="grid grid-rows-6 gap-2">
+                      {Array.from({ length: 6 }).map((__, r) => {
+                        const cell = replayBoard[r][col];
+                        const color =
+                          cell === 1 ? "bg-red-500" : cell === 2 ? "bg-yellow-400" : "bg-white/90";
+                        return (
+                          <div
+                            key={`a_${col}_${r}`}
+                            className={`aspect-square w-full rounded-full ${color} shadow-inner ring-2 ring-black/10`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {!selectedId && (
+                <div className="mt-3 text-left text-sm text-[hsl(var(--muted))]">
+                  Выбери игру слева, чтобы смотреть ходы.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </Shell>
