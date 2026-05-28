@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PrimaryButton, TextField } from "./ui/fields";
 import { checkWinner, drop, isFull, newBoard, type Board } from "./game/engine";
 import { pickMoveHard, pickMoveMedium } from "./game/ai";
-import { loadGuestArchive, saveGuestGame, type ArchivedGame } from "./game/archive";
+import { loadGuestArchive, saveGuestGame } from "./game/archive";
 import { createSocket } from "./lib/socket";
 
 function App() {
@@ -289,7 +289,7 @@ function Home() {
               </Link>
 
               {isGuest ? (
-                <Gate />
+                <Gate>{null}</Gate>
               ) : (
                 <Link
                   className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 hover:bg-[hsl(var(--card)/0.75)]"
@@ -303,7 +303,7 @@ function Home() {
               )}
 
               {isGuest ? (
-                <Gate />
+                <Gate>{null}</Gate>
               ) : (
                 <Link
                   className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 hover:bg-[hsl(var(--card)/0.75)]"
@@ -554,7 +554,7 @@ function Play() {
         setBusy(false);
         return;
       }
-      const nextMoves = [...moves, { moveIndex: moves.length, player: 2, col, row: d.row }];
+      const nextMoves = [...moves, { moveIndex: moves.length, player: 2 as const, col, row: d.row }];
       setBoard(d.board);
       setMoves(nextMoves);
       const w = checkWinner(d.board);
